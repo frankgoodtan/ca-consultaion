@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ca組會診時間紀錄</title>
+    <script charset="utf-8" src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f0f2f5; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; }
+        .container { background-color: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); width: 100%; max-width: 400px; box-sizing: border-box; }
+        h1 { text-align: center; color: #1a73e8; font-size: 24px; margin-bottom: 20px; }
+        .form-group { margin-bottom: 20px; }
+        label { display: block; margin-bottom: 8px; font-weight: bold; color: #333; }
+        select, input { width: 100%; padding: 12px; border: 1px solid #ccc; border-radius: 8px; font-size: 16px; box-sizing: border-box; }
+        .time-inputs { display: flex; gap: 10px; }
+        .time-inputs div { flex: 1; display: flex; align-items: center; gap: 5px; }
+        .time-inputs input { text-align: center; }
+        button { width: 100%; padding: 14px; border: none; border-radius: 8px; font-size: 18px; font-weight: bold; cursor: pointer; margin-top: 10px; transition: background-color 0.2s; }
+        .btn-submit { background-color: #1a73e8; color: white; }
+        .btn-submit:active { background-color: #1557b0; }
+        .btn-stats { background-color: #34a853; color: white; margin-top: 15px; }
+        .btn-stats:active { background-color: #2b803e; }
+        #liff-status { text-align: center; font-size: 12px; color: #888; margin-bottom: 15px; }
+
+        /* 🌟 補上：統計彈出視窗 (Modal) 的 CSS */
+        .modal { display: none; position: fixed; z-index: 1000; left: 0; top: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.6); }
+        .modal-content { background-color: #fefefe; margin: 5% auto; padding: 20px; border-radius: 12px; width: 90%; max-width: 500px; max-height: 90vh; overflow-y: auto; box-sizing: border-box; }
+        .close-btn { color: #aaa; float: right; font-size: 28px; font-weight: bold; cursor: pointer; }
+        .close-btn:hover { color: black; }
+        .loading-text { text-align: center; color: #666; margin: 20px 0; font-weight: bold; }
+        .detail-list { margin-top: 20px; border-top: 2px solid #eee; padding-top: 15px; }
+        .detail-day { font-weight: bold; color: #1a73e8; margin-bottom: 5px; margin-top: 15px; border-bottom: 1px solid #eee; padding-bottom: 5px;}
+        .detail-item { font-size: 14px; margin-left: 10px; color: #555; line-height: 1.6; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>Ca組會診時間紀錄!</h1>
+    <div id="liff-status">正在載入使用者資料...</div>
+    
+    <div class="form-group">
+        <label for="name">姓名</label>
+        <select id="name" onchange="manualNameChange()">
+            <option value="怡安">怡安</option>
+            <option value="茜云">茜云</option>
+            <option value="宜臻">宜臻</option>
+            <option value="姿云">姿云</option>
+            <option value="譚哥">譚哥</option>
+            <option value="毛哥">毛哥</option>
+            <option value="緯宸">緯宸</option>
+        </select>
+    </div>
+
+    <div class="form-group">
+        <label>會診出發時間</label>
+        <div class="time-inputs">
+            <div><input type="number" id="month" min="1" max="12"> 月</div>
+            <div><input type="number" id="day" min="1" max="31"> 日</div>
+            <div><input type="number" id="hour" min="0" max="23"> 時</div>
+            <div><input type="number" id="minute" min="0" max="59"> 分</div>
+        </div>
+    </div>
+
+    <button class="btn-submit" onclick="submitData()">確定送出</button>
+    <button class="btn-stats" onclick="openStats()">📊 會診出發趨勢</button>
+</div>
+
+<div id="statsModal" class="modal">
+    <div class="modal-content">
+        <span class="close-btn" onclick="closeStats()">&times;</span>
+        <h2 style="margin-top:0; color:#333; text-align:center;">會診出發時間分佈圖</h2>
+
+<div id="statsControls" style="display:none; gap:10px; margin-bottom:15px; flex-wrap:wrap; justify-content:center;">
+    <select id="statUser" onchange="redrawChart()" style="flex:1; padding:8px; border-radius:6px; font-size:16px;">
+        </select>
+    <select id="statRange" onchange="redrawChart()" style="flex:1; padding:8px; border-radius:6px; font-size:16px;">
+        <option value="7" selected>近 7 天</option>
+        <option value="30">近 30 天</option>
+    </select>
+</div>
+
+<div id="loadingMsg" class="loading-text" style="display:none;">📡 正在從資料庫抓取資料...</div>
+        
+        <canvas id="myChart" style="display:none;"></canvas>
+        
+        <div id="detailList" class="detail-list" style="display:none;"></div>
+    </div>
+</div>
+
+<script>
+    const API_URL = "https://script.google.com/macros/s/AKfycbzSKVpciHz680kBarFacFNDj2QydgI-GRo9M1CbLeZqZsh6_bqDuFEbF_z2trXrZocxqA/exec"; 
+    const MY_LIFF_ID = "2009594906-rbsS53ev"; 
+    let myChartInstance = null; // 儲存圖表實例
+let allFetchedData = []; // 暫存抓下來的資料，切換選單時不用重抓
+const USER_LIST = ["怡安", "茜云", "宜臻", "姿云", "譚哥", "毛哥", "緯宸"];
+const USER_COLORS = { "怡安": "#e6194b", "茜云": "#3cb44b", "宜臻": "#f58231", "姿云": "#4363d8", "譚哥": "#e6beff", "毛哥": "#911eb4", "緯宸": "#46f0f0" };
+
+// 工具：把 "09:30" 轉成數字 9.5 給圖表 Y 軸用
+function timeToDecimal(timeStr) {
+    const parts = timeStr.split(':');
+    return parseInt(parts[0]) + (parseInt(parts[1]) / 60);
+}
+// 工具：把數字 9.5 轉回字串 "09:30" 顯示
+function decimalToTime(dec) {
+    const h = Math.floor(dec);
+    const m = Math.round((dec - h) * 60);
+    return String(h).padStart(2, '0') + ':' + String(m).padStart(2, '0');
+}
+
+    window.onload = async function() {
+        setCurrentTime();
+        loadSavedName(); 
+
+        try {
+            await liff.init({ liffId: MY_LIFF_ID });
+            if (liff.isLoggedIn()) {
+                const profile = await liff.getProfile();
+                matchLineName(profile.displayName);
+            } else {
+                document.getElementById('liff-status').innerText = "未在 LINE 中開啟，使用快取設定。";
+            }
+        } catch (err) {
+            console.error('LIFF 初始化失敗', err);
+        }
+    };
+
+    function matchLineName(displayName) {
+        let matchedName = null;
+        if (displayName.includes("怡安")) matchedName = "怡安";
+        else if (displayName.includes("茜云")) matchedName = "茜云";
+        else if (displayName.includes("宜臻")) matchedName = "宜臻";
+        else if (displayName.includes("姿云")) matchedName = "姿云";
+        else if (displayName.includes("皓宇")) matchedName = "譚哥"; 
+        else if (displayName.includes("梓丞")) matchedName = "毛哥"; 
+        else if (displayName.includes("緯宸")) matchedName = "緯宸";
+
+        if (matchedName) {
+            document.getElementById('name').value = matchedName;
+            localStorage.setItem('ca_saved_name', matchedName); 
+            document.getElementById('liff-status').innerText = `已自動識別您的身分：${matchedName}`;
+        } else {
+            document.getElementById('liff-status').innerText = "無法識別 LINE 暱稱，請手動選擇。";
+        }
+    }
+
+    function manualNameChange() {
+        localStorage.setItem('ca_saved_name', document.getElementById('name').value);
+    }
+
+    function loadSavedName() {
+        const savedName = localStorage.getItem('ca_saved_name');
+        if (savedName) document.getElementById('name').value = savedName;
+    }
+
+    function setCurrentTime() {
+        const now = new Date();
+        document.getElementById('month').value = now.getMonth() + 1; // 新增抓取月份
+        document.getElementById('day').value = now.getDate();
+        document.getElementById('hour').value = now.getHours();
+        document.getElementById('minute').value = now.getMinutes();
+    }
+
+    function submitData() {
+        const name = document.getElementById('name').value;
+        const month = document.getElementById('month').value; // 新增抓取月份
+        const day = document.getElementById('day').value;
+        const hour = document.getElementById('hour').value;
+        const minute = document.getElementById('minute').value;
+
+        localStorage.setItem('ca_saved_name', name);
+        const payload = { name: name,month: month, day: day, hour: hour, minute: minute };
+
+        fetch(API_URL, { method: 'POST', body: JSON.stringify(payload) })
+        .then(response => console.log('背景連線成功'))
+        .catch(error => console.error('背景連線失敗:', error));
+
+        alert(`${name} 的會診時間已紀錄！\n出發時間：${month}月${day}日 ${hour}時 ${minute}分`);
+        setCurrentTime();
+    }
+
+    function closeStats() {
+        document.getElementById('statsModal').style.display = 'none';
+    }
+
+    async function openStats() {
+    document.getElementById('statsModal').style.display = 'block';
+    document.getElementById('loadingMsg').style.display = 'block';
+    document.getElementById('myChart').style.display = 'none';
+    document.getElementById('statsControls').style.display = 'none';
+    if(document.getElementById('detailList')) document.getElementById('detailList').style.display = 'none'; // 隱藏舊的文字明細
+
+    // 建立下拉選單 (預設為當前選擇的同學)
+    const statUserSelect = document.getElementById('statUser');
+    statUserSelect.innerHTML = `<option value="ALL">🌟 所有人 (折線總覽)</option>`;
+    const currentUser = document.getElementById('name').value;
+    USER_LIST.forEach(user => {
+        const isSelected = (user === currentUser) ? "selected" : "";
+        statUserSelect.innerHTML += `<option value="${user}" ${isSelected}>${user}</option>`;
+    });
+    document.getElementById('statRange').value = "7"; // 預設 7 天
+
+    try {
+        const response = await fetch(API_URL);
+        const result = await response.json();
+        if (result.status === "success") {
+            allFetchedData = result.data; 
+            document.getElementById('statsControls').style.display = 'flex';
+            redrawChart(); // 呼叫畫圖函數
+        } else {
+            alert("讀取資料失敗：" + result.message);
+        }
+    } catch (error) {
+        alert("網路連線錯誤，無法讀取資料。");
+    } finally {
+        document.getElementById('loadingMsg').style.display = 'none';
+    }
+}
+
+// 根據選單設定，動態繪製折線圖
+function redrawChart() {
+    const selectedUser = document.getElementById('statUser').value;
+    const daysToView = parseInt(document.getElementById('statRange').value);
+    
+    // 1. 產生連續的日期 X 軸 (例如從 7 天前到今天)
+    let labels = [];
+    const now = new Date();
+    for (let i = daysToView - 1; i >= 0; i--) {
+        let d = new Date();
+        d.setDate(now.getDate() - i);
+        labels.push((d.getMonth() + 1) + '/' + d.getDate());
+    }
+
+    // 2. 抓取資料並組成連線點
+    let datasets = [];
+    const usersToDraw = (selectedUser === "ALL") ? USER_LIST : [selectedUser];
+
+    usersToDraw.forEach(user => {
+        let userPoints = [];
+        allFetchedData.forEach(row => {
+            if (row.name === user && labels.includes(row.dateString)) {
+                userPoints.push({
+                    x: row.dateString, // X 軸對應日期
+                    y: timeToDecimal(row.timeString), // Y 軸對應小數點時間
+                    timeStr: row.timeString // 留著給提示框顯示用
+                });
+            }
+        });
+
+        if (userPoints.length > 0) {
+            datasets.push({
+                label: user,
+                data: userPoints, // 將該同學所有出發點按時間順序丟入
+                borderColor: USER_COLORS[user],
+                backgroundColor: USER_COLORS[user],
+                borderWidth: 2,
+                pointRadius: 5,
+                fill: false,
+                tension: 0 // 0 代表點與點之間用純直線連接
+            });
+        }
+    });
+
+    // 3. 繪製 Chart.js 折線圖
+    const ctx = document.getElementById('myChart').getContext('2d');
+    document.getElementById('myChart').style.display = 'block';
+
+    if (myChartInstance) { myChartInstance.destroy(); }
+
+myChartInstance = new Chart(ctx, {
+        type: 'line', 
+        data: { labels: labels, datasets: datasets },
+        options: {
+            responsive: true,
+            scales: {
+                y: {
+                    reverse: true, // 臨床視覺：時間越早(08:00)在越上方，越晚在下方
+                    min: 6, max: 24, // Y軸範圍：早上6點到半夜24點
+                    ticks: {
+                        stepSize: 2,
+                        callback: function(value) { return decimalToTime(value); } 
+                    }
+                }
+            },
+            // 🌟 關鍵修正：必須加上 plugins 外殼，系統才讀得到！
+            plugins: {
+                tooltip: {
+                    callbacks: {
+                        // 1. 標題：只顯示日期 (例如 "3/25")
+                        title: function(context) {
+                            return context[0].label; 
+                        },
+                        // 2. 內容：精簡顯示「姓名: 幾點幾分」
+                        label: function(context) {
+                            const user = context.dataset.label; // 姓名 (例如 "怡安")
+                            const exactTime = context.raw.timeStr; // 真實時間 (例如 "14:07")
+                            return `${user}: ${exactTime}`; 
+                        }
+                    }
+                }
+            }
+        }
+    });
+}
+</script>
+
+</body>
+</html>
